@@ -1,0 +1,103 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# System-Architecture Document (SAD)
+## Therapist-Side “Action-Button” AI Assistant (v0.3)
+## 1. Purpose
+Build a browser-based web app that layers a handful of “action buttons” on top of the LangChain + Next.js starter template.  
+The app will perform continuous, real-time speech-to-text transcription during a session. The therapist manually assigns transcribed utterances to either the 'Therapist' or 'Client' log. When an action button is pressed, the structured transcript log is sent to an OpenAI model, and the reply is streamed back to the UI.  
+Reason for Change (v0.3): The v0.2 prototype revealed that a "record-then-assign" workflow for single utterances was clunky. The new model, validated in prototype_v2.html, uses continuous transcription into a staging area, followed by a low-stress, post-hoc assignment. This is a vastly superior user experience.
+
+## 2. Scope & Constraints
+- Item	Decision  
+- LLM provider	OpenAI API  
+- Front-end	Next.js (App Router) + Vercel AI SDK + Tailwind CSS  
+- Back-end	Serverless Edge Functions (/app/api/*)  
+- Transcription feed	SpeechRecognition Web API in continuous mode, managed by a single "Start/Stop Session" button.  
+- Speaker labels	Manual assignment from a "staging area". Transcribed text appears in real-time; the therapist clicks "Assign to Therapist/Client" to move text from staging to the final log. This is a non-blocking, asynchronous workflow.  
+- Users	Single therapist / single client; no auth  
+- Compliance	FOR DEMONSTRATION ONLY. NOT HIPAA-COMPLIANT. A prominent banner must warn the user.
+
+## 3. High-Level Flow (Revised for v0.3)
+┌─────────────────┐ ┌────────────────────┐
+│ Start Session │──▶ │ SpeechRecognition │
+│ Button (Toggle) │ │ (continuous mode) │
+└─────────────────┘ └──────────┬─────────┘
+│ (real-time text stream)
+▼
+┌────────────────────────┐
+│ Staging Area (UI) │
+│ Displays live text. │
+└──────────┬─────────────┘
+│
+User Clicks │
+"Assign to Therapist/Client" │
+▼
+┌──────────────────┐ ┌──────────────────────────┐
+│ Final Transcript │◀──── │ Text moved from Staging, │
+│ Log (Array State)│ │ labeled, and appended. │
+└──────────────────┘ └──────────────────────────┘
+│
+│ (Formatted as string on-demand)
+▼
+┌────────────────┐ ┌──────────────┐
+│ Action Button │─onClick──→ │ POST /api/* │──▶ OpenAI
+└────────────────┘ └──────────────┘
+
+swift
+Copy
+Edit
+Use code with caution.  
+**Text**  
+**Description:**  
+- Therapist clicks a single "Start Session" button.  
+- The SpeechRecognition API begins listening in continuous mode.  
+- As speech is transcribed, it appears in a "Staging Area" on the UI.  
+- After an utterance is complete, the therapist clicks either "Add to Therapist Log" or "Add to Client Log".  
+- This action takes the finalized text from the staging area, adds the correct speaker label, and pushes it as an object to the final transcript log array. The staging area is then cleared.  
+- The "Action Button" flow uses the clean, final transcript log as its input.
+
+## 4. Component List (Revised)
+- `/app/page.tsx`: Manages all primary state: isRecording, stagedText, and the final transcriptLog array. Renders the session controls, staging area, assignment buttons, and the final transcript display.  
+- `/components/ChatWindow.tsx`: (From template) Used to display AI assistant messages.  
+- `/components/ActionButtons.tsx`: (To be created) Renders buttons; receives the formatted transcript string as a prop.  
+- `/lib/useContinuousTranscription.ts`: Manages the continuous SpeechRecognition session.  
+- `/app/api/chat/route.ts`: (To be modified) The API route that handles the LLM call.  
+- `/lib/prompts.ts`: (Created) A map of action names to system prompts.  
+- `/components/DownloadTranscript.tsx`: (To be created) A simple component to download the log.
+
+## 5. Continuous Transcription Hook (Skeleton)
+```typescript
+// /lib/useContinuousTranscription.ts
+// ... (The code we just added to the project)
+export function useContinuousTranscription() {
+  // ... encapsulates all SpeechRecognition logic ...
+  return { 
+    isListening, 
+    transcript, 
+    start, 
+    stop, 
+    clearStagedFinalTranscript,
+    isSupported: !!SpeechRecognition 
+  };
+}
+
+
+## 6-11. Other Sections
+No fundamental changes to API routes, Prompts, Persistence, Deployment, or Future Extensions. The core architecture of these components remains sound. The new front-end workflow now provides them with the high-quality data they were designed to expect.
+
+## 12. Open Items (Revised for v0.3)
+- Implement useContinuousTranscription hook and prompts.ts - DONE
+- Build the primary UI in /app/page.tsx: - THIS IS OUR NEXT STEP
+- A single "Start/Stop Session" button.
+- A "Staging Area" to display the transcript.final and transcript.interim values from the hook.
+- "Assign to Therapist" and "Assign to Client" buttons.
+- A display area for the final transcript log.
+- Integrate with Vercel useChat hook for AI communication.
+- Create ActionButtons component.
+- Modify backend API route to use our custom prompts.
+- Ensure robust error handling if isSupported from the hook is false.
+
+

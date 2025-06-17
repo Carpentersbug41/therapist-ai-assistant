@@ -1,0 +1,393 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+Execute these steps in order. Do not skip any. Each step builds upon the last.
+Phase 1: Build the Core Transcription UI
+This phase replaces the default chat UI with our custom transcription interface.
+Step 1.1: Overwrite the Main Page (/app/page.tsx)
+Go to /app/page.tsx and replace its entire contents with the following code. This will create our transcription UI, powered by the hook we already created.
+// /app/page.tsx
+
+'use client';
+
+import { useState } from 'react';
+import { useContinuousTranscription } from '../lib/useContinuousTranscription';
+
+// Define the shape of a single entry in our final transcript log
+export interface TranscriptEntry {
+  speaker: 'therapist' | 'client';
+  text: string;
+}
+
+export default function Page() {
+  const [transcriptLog, setTranscriptLog] = useState<TranscriptEntry[]>([]);
+  
+  const {
+    isListening,
+    transcript,
+    start,
+    stop,
+    clearStagedFinalTranscript,
+    isSupported,
+  } = useContinuousTranscription();
+
+  const handleAssignSpeaker = (speaker: 'therapist' | 'client') => {
+    const textToAssign = transcript.final.trim();
+    if (!textToAssign) return;
+
+    setTranscriptLog(prevLog => [...prevLog, { speaker, text: textToAssign }]);
+    clearStagedFinalTranscript();
+  };
+
+  if (!isSupported) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-red-100 text-red-800">
+        <p className="text-2xl font-bold">
+          Speech Recognition is not supported in this browser. Please use Chrome or Edge.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col items-center min-h-screen bg-gray-100 p-4 sm:p-6 md:p-8">
+      <main className="w-full max-w-4xl bg-white p-6 rounded-lg shadow-lg">
+        <h1 className="text-3xl font-bold text-center mb-6 text-gray-800">
+          Therapist AI Assistant
+        </h1>
+        
+        <div className="p-4 mb-6 text-center bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700">
+          <p className="font-bold">Demonstration Only</p>
+          <p>This is a prototype. Do not use real Patient Health Information (PHI).</p>
+        </div>
+
+        {/* --- Transcription Section --- */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          
+          {/* Left Column: Controls and Staging */}
+          <div className="flex flex-col gap-6">
+            <div className="text-center">
+              <button
+                onClick={isListening ? stop : start}
+                className={`w-full px-8 py-3 text-lg font-semibold rounded-md text-white transition-colors ${
+                  isListening ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'
+                }`}
+              >
+                {isListening ? 'Stop Session' : 'Start Session'}
+              </button>
+            </div>
+            
+            <div className={`transition-opacity duration-300 ${isListening || transcript.final ? 'opacity-100' : 'opacity-50'}`}>
+              <div className="border border-gray-300 rounded-lg p-4 bg-gray-50 min-h-[120px]">
+                <h3 className="text-sm font-semibold text-gray-500 mb-2">LIVE TEXT (Staging Area)</h3>
+                <p className="text-gray-800">
+                  {transcript.final}
+                  <span className="text-gray-500">{transcript.interim}</span>
+                </p>
+              </div>
+              <div className="flex gap-4 justify-center mt-4">
+                <button
+                  onClick={() => handleAssignSpeaker('therapist')}
+                  disabled={!transcript.final.trim()}
+                  className="flex-1 px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed"
+                >
+                  Assign to Therapist
+                </button>
+                <button
+                  onClick={() => handleAssignSpeaker('client')}
+                  disabled={!transcript.final.trim()}
+                  className="flex-1 px-4 py-2 bg-purple-500 text-white rounded-md hover:bg-purple-600 disabled:bg-gray-300 disabled:cursor-not-allowed"
+                >
+                  Assign to Client
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Right Column: Final Transcript Log */}
+          <div className="border-t-2 md:border-t-0 md:border-l-2 border-gray-200 md:pl-6">
+            <h2 className="text-xl font-semibold text-gray-700 mb-4">Final Transcript Log</h2>
+            <div className="space-y-3 h-[400px] overflow-y-auto pr-2 bg-gray-50 p-3 rounded-md">
+              {transcriptLog.length > 0 ? (
+                transcriptLog.map((entry, index) => (
+                  <div
+                    key={index}
+                    className={`p-3 rounded-lg ${
+                      entry.speaker === 'therapist'
+                        ? 'bg-blue-100 text-blue-900'
+                        : 'bg-purple-100 text-purple-900'
+                    }`}
+                  >
+                    <strong className="capitalize font-bold">{entry.speaker}:</strong> {entry.text}
+                  </div>
+                ))
+              ) : (
+                <p className="text-gray-500 italic text-center mt-8">The transcript log will appear here.</p>
+              )}
+            </div>
+          </div>
+        </div>
+        
+        {/* Placeholder for AI Actions */}
+        <div className="mt-8 border-t-2 border-gray-200 pt-6">
+          <h2 className="text-xl font-semibold text-gray-700 mb-4">AI Actions & Output</h2>
+          {/* This is where the action buttons and chat window will go */}
+        </div>
+
+      </main>
+    </div>
+  );
+}
+Use code with caution.
+Tsx
+Checkpoint 1: Run yarn dev. Open http://localhost:3000. Your application should now look completely different. Verify that you can start a session, speak, assign text to both speakers, and see it appear correctly in the "Final Transcript Log". Once this works, proceed.
+Phase 2: Modify the Backend API
+This phase adapts the server to understand our custom actions and prompts.
+Step 2.1: Overwrite the Chat API Route (/app/api/chat/route.ts)
+Go to /app/api/chat/route.ts and replace its entire contents with the following. This new code knows how to look for our custom action payload and use the corresponding system prompt.
+// /app/api/chat/route.ts
+
+import {
+  StreamData,
+  StreamingTextResponse,
+  LangChainAdapter,
+} from 'ai';
+import { ChatOpenAI } from '@langchain/openai';
+import { PromptTemplate } from '@langchain/core/prompts';
+import { StringOutputParser } from '@langchain/core/output_parsers';
+import { RunnableSequence } from '@langchain/core/runnables';
+import { PROMPTS, ActionType } from '../../lib/prompts';
+
+export const runtime = 'edge';
+
+const formatMessage = (message: { role: string; content: string }) => {
+  return `${message.role}: ${message.content}`;
+};
+
+export async function POST(req: Request) {
+  const body = await req.json();
+  const messages = body.messages ?? [];
+  const lastMessage = messages[messages.length - 1];
+
+  // Extract the custom data payload from the Vercel AI SDK message
+  const action = lastMessage.data?.action as ActionType;
+  const transcript = lastMessage.data?.transcript as string;
+
+  // Validate the action
+  if (!action || !PROMPTS[action]) {
+    return new Response(JSON.stringify({ error: 'Invalid action specified' }), { status: 400 });
+  }
+
+  // Get the system prompt from our library
+  const systemPrompt = PROMPTS[action];
+
+  const model = new ChatOpenAI({
+    temperature: 0.7,
+    modelName: 'gpt-4o-mini',
+  });
+
+  const prompt = PromptTemplate.fromTemplate(
+    `System Prompt: {system_prompt}
+    
+    Transcript:
+    ---
+    {transcript}
+    ---
+    
+    Assistant's Response:`
+  );
+
+  const chain = RunnableSequence.from([
+    prompt,
+    model,
+    new StringOutputParser(),
+  ]);
+
+  const stream = await chain.stream({
+    system_prompt: systemPrompt,
+    transcript: transcript,
+  });
+
+  // Use the LangChainAdapter to handle the stream and response
+  const data = new StreamData();
+  data.append({ 'text': 'some text' }); // Example of appending metadata
+  
+  const aiStream = LangChainAdapter.toAIStream(stream, {
+    onFinal() {
+      data.close();
+    },
+  });
+
+  return new StreamingTextResponse(aiStream, {}, data);
+}
+Use code with caution.
+Ts
+Phase 3: Integrate the Frontend and Backend
+This phase creates the ActionButtons and plugs everything into the Vercel useChat hook, connecting the full end-to-end flow.
+Step 3.1: Create the ActionButtons Component
+Create a new folder named components in the root of your project.
+Inside /components, create a new file named ActionButtons.tsx.
+Paste the following code into it.
+// /components/ActionButtons.tsx
+
+'use client';
+
+import { PROMPTS, ActionType } from '../lib/prompts';
+import { TranscriptEntry } from '../app/page';
+import { type Append } from 'ai/react';
+
+interface ActionButtonsProps {
+  transcriptLog: TranscriptEntry[];
+  append: Append;
+  isChatLoading: boolean;
+}
+
+export function ActionButtons({ transcriptLog, append, isChatLoading }: ActionButtonsProps) {
+  const handleActionClick = (action: ActionType) => {
+    // 1. Format the transcript log into a single string
+    const formattedTranscript = transcriptLog
+      .map(entry => `${entry.speaker.charAt(0).toUpperCase() + entry.speaker.slice(1)}: ${entry.text}`)
+      .join('\n');
+
+    // 2. Call the `append` function from `useChat`
+    // The Vercel AI SDK lets us pass a custom `data` payload
+    append({
+      role: 'user',
+      content: `Action: ${action}. Transcript is attached.`, // This content isn't used by the API but is good for debugging
+      data: {
+        action: action,
+        transcript: formattedTranscript,
+      },
+    });
+  };
+
+  const hasTranscript = transcriptLog.length > 0;
+
+  return (
+    <div className="flex flex-wrap gap-3">
+      {Object.keys(PROMPTS).map(key => {
+        const actionKey = key as ActionType;
+        return (
+          <button
+            key={actionKey}
+            onClick={() => handleActionClick(actionKey)}
+            disabled={!hasTranscript || isChatLoading}
+            className="px-4 py-2 text-sm font-medium text-white bg-gray-600 rounded-lg hover:bg-gray-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+          >
+            {actionKey.replace(/([A-Z])/g, ' $1').trim()} {/* Adds spaces for readability */}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+Use code with caution.
+Tsx
+Step 3.2: Update page.tsx to Use useChat and ActionButtons
+Go back to /app/page.tsx and replace its contents one last time with this final version. This version integrates the Vercel AI SDK's useChat hook and our new ActionButtons component.
+// /app/page.tsx (FINAL VERSION)
+
+'use client';
+
+import { useState } from 'react';
+import { useContinuousTranscription } from '../lib/useContinuousTranscription';
+import { useChat } from 'ai/react';
+import { ActionButtons } from '../components/ActionButtons';
+
+export interface TranscriptEntry {
+  speaker: 'therapist' | 'client';
+  text: string;
+}
+
+export default function Page() {
+  const [transcriptLog, setTranscriptLog] = useState<TranscriptEntry[]>([]);
+  
+  const {
+    isListening,
+    transcript,
+    start,
+    stop,
+    clearStagedFinalTranscript,
+    isSupported,
+  } = useContinuousTranscription();
+  
+  const { messages, append, isLoading: isChatLoading } = useChat({
+    api: '/api/chat', // Point to our modified API route
+  });
+
+  const handleAssignSpeaker = (speaker: 'therapist' | 'client') => {
+    const textToAssign = transcript.final.trim();
+    if (!textToAssign) return;
+    setTranscriptLog(prevLog => [...prevLog, { speaker, text: textToAssign }]);
+    clearStagedFinalTranscript();
+  };
+  
+  // Find the last assistant message to display
+  const lastAssistantMessage = messages.filter(m => m.role === 'assistant').pop();
+
+  if (!isSupported) {
+    return <div className="flex items-center justify-center min-h-screen bg-red-100 text-red-800"><p className="text-2xl font-bold">Speech Recognition is not supported. Please use Chrome or Edge.</p></div>;
+  }
+
+  return (
+    <div className="flex flex-col items-center min-h-screen bg-gray-100 p-4 sm:p-6 md:p-8">
+      <main className="w-full max-w-4xl bg-white p-6 rounded-lg shadow-lg">
+        <h1 className="text-3xl font-bold text-center mb-6 text-gray-800">Therapist AI Assistant</h1>
+        <div className="p-4 mb-6 text-center bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700"><p className="font-bold">Demonstration Only: Not HIPAA Compliant.</p></div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8">
+          {/* Left Column: Controls and Staging */}
+          <div className="flex flex-col gap-6">
+            <button onClick={isListening ? stop : start} className={`w-full px-8 py-3 text-lg font-semibold rounded-md text-white transition-colors ${isListening ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'}`}>{isListening ? 'Stop Session' : 'Start Session'}</button>
+            <div className={`transition-opacity duration-300 ${isListening || transcript.final ? 'opacity-100' : 'opacity-50'}`}>
+              <div className="border border-gray-300 rounded-lg p-4 bg-gray-50 min-h-[120px]">
+                <h3 className="text-sm font-semibold text-gray-500 mb-2">LIVE TEXT (Staging Area)</h3>
+                <p className="text-gray-800">{transcript.final}<span className="text-gray-500">{transcript.interim}</span></p>
+              </div>
+              <div className="flex gap-4 justify-center mt-4">
+                <button onClick={() => handleAssignSpeaker('therapist')} disabled={!transcript.final.trim()} className="flex-1 px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 disabled:bg-gray-300">Assign to Therapist</button>
+                <button onClick={() => handleAssignSpeaker('client')} disabled={!transcript.final.trim()} className="flex-1 px-4 py-2 bg-purple-500 text-white rounded-md hover:bg-purple-600 disabled:bg-gray-300">Assign to Client</button>
+              </div>
+            </div>
+          </div>
+
+          {/* Right Column: Final Transcript Log */}
+          <div className="border-t-2 md:border-t-0 md:border-l-2 border-gray-200 mt-6 md:mt-0 md:pl-8">
+            <h2 className="text-xl font-semibold text-gray-700 mb-4">Final Transcript Log</h2>
+            <div className="space-y-3 h-[400px] overflow-y-auto pr-2 bg-gray-50 p-3 rounded-md">
+              {transcriptLog.length > 0 ? transcriptLog.map((entry, index) => (<div key={index} className={`p-3 rounded-lg ${entry.speaker === 'therapist' ? 'bg-blue-100 text-blue-900' : 'bg-purple-100 text-purple-900'}`}><strong className="capitalize font-bold">{entry.speaker}:</strong> {entry.text}</div>)) : <p className="text-gray-500 italic text-center mt-8">Transcript log will appear here.</p>}
+            </div>
+          </div>
+        </div>
+        
+        <div className="mt-8 border-t-2 border-gray-200 pt-6">
+          <h2 className="text-xl font-semibold text-gray-700 mb-4">AI Actions & Output</h2>
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="lg:col-span-1">
+              <h3 className="text-lg font-medium text-gray-600 mb-3">Actions</h3>
+              <ActionButtons transcriptLog={transcriptLog} append={append} isChatLoading={isChatLoading} />
+            </div>
+            <div className="lg:col-span-2">
+              <h3 className="text-lg font-medium text-gray-600 mb-3">AI Response</h3>
+              <div className="border border-gray-300 rounded-lg p-4 bg-gray-50 min-h-[150px]">
+                {isChatLoading && !lastAssistantMessage ? <p className="text-gray-500">AI is thinking...</p> : null}
+                {lastAssistantMessage ? <p className="text-gray-800 whitespace-pre-wrap">{lastAssistantMessage.content}</p> : <p className="text-gray-500 italic">The AI's response will appear here.</p>}
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  );
+}
+Use code with caution.
+Tsx
+Checkpoint 2: Restart your server (yarn dev). The full application is now in place.
+Start a session and create a transcript with a few entries from both therapist and client.
+Click one of the action buttons (e.g., "Reflect" or "Summary").
+The button should disable, and you should see "AI is thinking..."
+The AI's response should stream into the "AI Response" box.
+
+You have now built the entire application as specified in the SAD.
