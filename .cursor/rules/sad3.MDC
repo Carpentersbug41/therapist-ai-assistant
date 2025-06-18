@@ -1,0 +1,156 @@
+---
+
+Project Handover & Engineer Onboarding Document  
+Project: Therapist AI Assistant  
+Version: 2.0 (Stateful Memory & Context-Aware Architecture)  
+
+1. Project Overview & Core Purpose  
+This project is a browser-based tool for psychotherapists, functioning as an AI-powered "copilot" during a live therapy session. The v2.0 architecture is designed to overcome the limitations of a stateless prototype by implementing a sophisticated memory system, enabling the AI to provide contextually relevant assistance throughout long sessions. Its core philosophy is to augment the therapist with different AI tools suited for different therapeutic moments (e.g., immediate paraphrasing vs. deep thematic summary).
+
+2. Getting Started: Environment Setup  
+- **Clone Repository:** Obtain the project files.  
+- **Install Dependencies:** Run `npm install` or `yarn install`.  
+- **Configure Environment:** Copy `.env.local.example` to `.env.local` and add your OpenAI API key.  
+- **Run Development Server:** Run `npm run dev` or `yarn dev`.  
+- **Access Application:** Open `http://localhost:3000` in a Chromium-based browser (Chrome, Edge) for SpeechRecognition API compatibility.
+
+3. Core Architecture (v2.0)  
+The v2.0 architecture is a significant evolution from a simple stateless model. Its success depends on understanding these core principles:
+
+- **Stateful Client, Stateless Server:**  
+  The client (`page.tsx`) is the single source of truth. It holds the complete `transcriptLog` and the `currentSummary`. The server (`route.ts`) remains stateless, receiving everything it needs in each API call.
+
+- **The "Dual-Task" Server (Actor vs. Librarian):**  
+  The server has two "brains" that perform different jobs in response to a single API call:  
+  - **The "Actor" (Action Task):** Responds immediately to the user's request (e.g., Paraphrase). It is given a limited, short-term memory (the buffer) to ensure its responses are fast and in-the-moment.  
+  - **The "Librarian" (Memory Task):** Works in the background to maintain the long-term session summary. It is a detached observer.
+
+- **Context-Aware Prompt Router:**  
+  The server is an intelligent orchestrator. It inspects the requested action and builds a tailored payload for the LLM. "Low-context" actions like Paraphrase get a different, smaller prompt than "high-context" actions like SummariseEnd, which receive the full summary.
+
+- **High-Level Data Flow:**  
+  - Client bundles the action, `messagesForAction` buffer, `fullTranscript`, and `currentSummary` into a single JSON payload.  
+  - Server receives the payload.  
+  - The Librarian task starts in the background to update the summary if needed.  
+  - The Actor task starts immediately, using a prompt tailored to the action.  
+  - The Actor's response is streamed to the client. The Librarian's new summary is attached to this stream via `StreamData`.  
+  - Client renders the AI's response and silently updates its `currentSummary` state, ready for the next turn.
+
+4. Codebase Tour  
+- `app/page.tsx`: The primary UI component. Manages all state and user interactions. (See Appendix A)  
+- `app/api/chat/route.ts`: The serverless edge function. The "brain" of the application. (See Appendix C)  
+- `lib/prompts.ts`: A dictionary of all system prompts for the various AI actions.  
+- `lib/useContinuousTranscription.ts`: The custom hook for managing the browser's SpeechRecognition API. (See Appendix D)
+
+5. Appendices  
+For a detailed breakdown of each critical component, refer to the following documents:  
+- **Appendix A:** Client-Side State & Logic (`page.tsx`)  
+- **Appendix B:** API Contract & Payload Specification  
+- **Appendix C:** Server-Side Orchestration (`route.ts`)  
+- **Appendix D:** The Transcription Hook (`useContinuousTranscription.ts`)
+
+---
+
+### Appendix A: Client-Side Logic (`page.tsx`)
+
+This component orchestrates the entire user experience.
+
+- **State Management:**  
+  - `transcriptLog: TranscriptEntry[]`: The absolute source of truth for the conversation history.  
+  - `currentSummary: string`: The latest summary received from the server. Only updated via the API response stream.  
+  - `isPausedForAction: boolean`: A flag to manage the pause/resume cycle of transcription during an AI action.
+
+- **Core Handler: `handleActionClick`**  
+  - **Pauses Transcription:** Calls `stop()` to prevent speech recognition while the AI is thinking. Sets `isPausedForAction` to `true`.  
+  - **Constructs Payload:** Assembles the `action`, `messagesForAction` buffer, `fullTranscript`, and `currentSummary` into a single body object.  
+  - **Calls API:** Uses `useChat().append()` to send the request.  
+  - **Updates Log:** Updates the local `transcriptLog` with any text from the staging area.
+
+- **Automatic Transcription Restart (`useEffect`):**  
+  A `useEffect` hook watches `isPausedForAction` and `isChatLoading`. When `isPausedForAction` is `true` and `isChatLoading` becomes `false` (i.e., the AI has finished), it calls `start()` to resume transcription.
+
+- **Summary Update (`useEffect`):**  
+  A `useEffect` hook watches the `data` object from `useChat`. When it detects a `newSummary` field in the latest data entry, it updates the `currentSummary` state and displays a success toast.
+
+---
+
+### Appendix B: API Contract & Payload Specification
+
+This defines the communication protocol between the client and server.
+
+- **Request Body:** The client sends a POST request to `/api/chat` with a JSON body containing:  
+  - `action: string`: e.g., `"Paraphrase"`  
+  - `messagesForAction: Array<{role: string, content: string}>`: The recent conversation buffer, with therapist mapped to assistant and client to user.  
+  - `fullTranscript: string`: The entire transcript as a single, newline-delimited string.  
+  - `currentSummary: string`: The current summary held by the client.
+
+- **Example Server-Side Payload:**
+
+```json
+{
+  "action": "Paraphrase",
+  "messagesForAction": [
+    { "role": "assistant", "content": "turn one" },
+    { "role": "user", "content": "turn two" }
+  ],
+  "fullTranscript": "Therapist: turn one\nClient: turn two",
+  "currentSummary": ""
+}
+
+
+---
+### Appendix C: Server-Side Orchestration (`route.ts`)
+
+This is the application's brain.
+
+#### Constants:
+- **HIGH_CONTEXT_ACTIONS: ActionType[]**  
+  An array defining which actions require the full summary (e.g., `['SummariseEnd', 'SummariseMid']`).
+
+- **SUMMARY_TRIGGER_THRESHOLD: number**  
+  The number of turns required before the memory task runs (e.g., `8`).
+
+#### Prompt Router (`if/else` block):
+This is the core logic. It checks if the requested action is in the `HIGH_CONTEXT_ACTIONS` array.
+
+- **If TRUE (High-Context):**  
+  It constructs a single system message using the *Instruction Sandwich* pattern, injecting the `currentSummary` and formatted `messagesForAction` buffer into the prompt.
+
+- **If FALSE (Low-Context):**  
+  It constructs a system message and a separate user/assistant history. The summary is deliberately excluded.
+
+---
+
+#### Memory Task ("Tumbling Window"):
+This logic runs asynchronously.
+
+- It only triggers if `transcriptTurnCount >= SUMMARY_TRIGGER_THRESHOLD`.  
+- When triggered, it makes a **separate LLM call** with a specific summarization prompt, providing the `currentSummary` and the `fullTranscript` as context.  
+- The `newSummary` it receives is **attached to the main response stream** via `StreamData`.
+
+---
+
+### Appendix D: The Transcription Hook (`useContinuousTranscription.ts`)
+
+#### Purpose:
+To abstract the complexity of the browser’s `SpeechRecognition` API and provide a simple interface (`start`, `stop`, `takeTranscript`).
+
+#### Current State (Technical Debt):
+The current implementation uses a `setTimeout`-based `ignoreNextResultRef` flag to prevent a race condition where a “stray” result fires after the transcript is taken.
+
+#### CRITICAL FLAW:
+This approach is **fragile and unreliable**. It is a timing-based hack. On a slow machine or network, the 250ms timeout could be incorrect, causing the bug to reappear.
+
+---
+
+### The Path to a Robust Solution:
+The hook should be refactored to use a **deterministic stop-and-restart pattern**. When `takeTranscript()` is called, it should:
+
+1. **Call `recognition.stop()`**  
+   This forces the browser to finalize the current utterance and prevents any stray results.
+
+2. **Return the captured text**
+
+The `onend` handler in the hook is already designed to automatically call `recognition.start()` if the “desired state” is still listening. This creates a **crisp, reliable, sub-second cycle** that definitively solves the race condition **without relying on timers**.
+
+> **This refactor should be a high-priority task.**

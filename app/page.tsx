@@ -7,17 +7,23 @@ import { useChat } from 'ai/react';
 import { ActionButtons } from '../components/ActionButtons';
 import { ActionType } from '../lib/prompts';
 import { DebugPanel } from '../components/DebugPanel';
+import { createActionMessages } from '../lib/actions';
 
 export interface TranscriptEntry {
   speaker: 'therapist' | 'client';
   text: string;
 }
 
+interface StreamedData {
+  newSummary?: string;
+}
+
 export default function Page() {
   const [transcriptLog, setTranscriptLog] = useState<TranscriptEntry[]>([]);
+  const [currentSummary, setCurrentSummary] = useState('');
   const [isClient, setIsClient] = useState(false);
   const [lastEvent, setLastEvent] = useState('');
-  const [shouldResumeTranscription, setShouldResumeTranscription] = useState(false);
+  const [isPausedForAction, setIsPausedForAction] = useState(false);
 
   const handleSpeechEvent = useCallback((eventName: string) => {
     setLastEvent(eventName);
@@ -32,11 +38,15 @@ export default function Page() {
     takeTranscript,
   } = useContinuousTranscription(handleSpeechEvent);
   
-  const { messages, append, isLoading: isChatLoading } = useChat({
+  const { messages, append, isLoading: isChatLoading, data } = useChat({
     api: '/api/chat',
     onError: (error) => {
-      console.error("❌ [CLIENT] Request failed:", error);
-      toast.error("AI request failed. Please check your connection and try again.");
+      console.error("❌ [CLIENT] API Request failed:", error);
+      
+      toast.error("AI Response Failed", {
+        description: "There was a problem communicating with the AI. Please check your connection and try again.",
+        duration: 5000
+      });
     },
   });
 
@@ -52,53 +62,91 @@ export default function Page() {
   
   const handleActionClick = (action: ActionType) => {
     if (isListening) {
-      setShouldResumeTranscription(true);
+      setIsPausedForAction(true);
+      stop();
     }
-    const stagingText = takeTranscript();
-    let finalLog = [...transcriptLog];
+    const MEMORY_BUFFER_SIZE = 6;
+
+    const newLog = [...transcriptLog];
+    const stagingText = takeTranscript().trim();
     if (stagingText) {
-      finalLog.push({ speaker: 'client', text: stagingText });
+      newLog.push({ speaker: 'client', text: stagingText });
     }
-    const formattedTranscript = finalLog.length > 0
-      ? finalLog
-          .map(entry => `${entry.speaker.charAt(0).toUpperCase() + entry.speaker.slice(1)}: ${entry.text}`)
-          .join('\n')
-      : "Client: This is a sample transcript for an empty log.";
-    append({
-      role: 'user',
-      content: `Action: ${action}. Transcript attached.`,
-      data: { action, transcript: formattedTranscript },
-    });
-    setTranscriptLog(finalLog);
-    takeTranscript();
+
+    const buffer = newLog.slice(-MEMORY_BUFFER_SIZE);
+
+    const messagesForAction = createActionMessages(buffer);
+
+    const fullTranscript = newLog
+      .map(e => `${e.speaker.charAt(0).toUpperCase() + e.speaker.slice(1)}: ${e.text}`)
+      .join('\\n');
+
+    append(
+      { role: 'user', content: `Performing action: ${action}...` },
+      {
+        body: {
+          action,
+          messagesForAction,
+          fullTranscript,
+          currentSummary,
+        },
+      }
+    );
+
+    setTranscriptLog(newLog);
+    takeTranscript(); 
   };
 
   const handleDownloadTranscript = () => {
-    if (transcriptLog.length === 0) {
-      toast.error("Transcript is empty. Nothing to download.");
+    if (transcriptLog.length === 0 && !currentSummary) {
+      toast.info("There is no transcript or summary to download.");
       return;
     }
-
-    const formattedTranscript = transcriptLog
-      .map(entry => `${entry.speaker.charAt(0).toUpperCase() + entry.speaker.slice(1)}: ${entry.text}`)
-      .join('\\n');
+  
+    // 1. Create a professional header
+    const now = new Date();
+    const dateString = now.toLocaleDateString();
+    const timeString = now.toLocaleTimeString();
     
-    const blob = new Blob([formattedTranscript], { type: 'text/plain;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
+    const header = `
+========================================
+   Therapy Session Transcript
+========================================
+Date: ${dateString}
+Time: ${timeString}
+
+Session Summary:
+----------------
+${currentSummary || "No summary was generated for this session."}
+========================================
+
+`;
+  
+    // 2. Format the main transcript with proper line breaks
+    const formattedLog = transcriptLog
+      .map(entry => `${entry.speaker.charAt(0).toUpperCase() + entry.speaker.slice(1)}: ${entry.text}`)
+      .join('\n\n'); // Use double newline for readability
+  
+    // 3. Combine header and log into the final file content
+    const fileContent = header.trim() + '\n\n' + formattedLog;
+  
+    // 4. Create and trigger the download
+    const blob = new Blob([fileContent], { type: 'text/plain;charset=utf-8' });
     const link = document.createElement('a');
-    link.href = url;
-    const timestamp = new Date().toISOString().replace(/:/g, '-');
-    link.download = `transcript-${timestamp}.txt`;
+    link.href = URL.createObjectURL(blob);
+    
+    const timestamp = now.toISOString().replace(/[:.]/g, '-');
+    link.download = `therapy-session-${timestamp}.txt`;
+  
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    URL.revokeObjectURL(link.href);
     toast.success("Transcript downloaded.");
   };
 
   const lastAssistantMessage = messages.filter(m => m.role === 'assistant').pop();
   const isStagingAreaActive = (transcript.final.trim() || transcript.interim.trim()).length > 0;
-  const isReadyForAssignment = isStagingAreaActive && transcript.interim.trim().length === 0;
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -129,15 +177,27 @@ export default function Page() {
   }, [handleAssignSpeaker, handleClearStaging]);
 
   useEffect(() => {
-    if (shouldResumeTranscription && !isChatLoading && !isListening) {
+    if (isPausedForAction && !isChatLoading && !isListening) {
       start();
-      setShouldResumeTranscription(false);
+      setIsPausedForAction(false);
     }
-  }, [shouldResumeTranscription, isChatLoading, isListening, start]);
+  }, [isPausedForAction, isChatLoading, isListening, start]);
 
   useEffect(() => {
     setIsClient(true);
   }, []);
+
+  useEffect(() => {
+    if (data && data.length > 0) {
+      const lastDataEntry = data[data.length - 1] as StreamedData;
+      if (typeof lastDataEntry === 'object' && lastDataEntry !== null && 'newSummary' in lastDataEntry) {
+        if (lastDataEntry.newSummary && lastDataEntry.newSummary !== currentSummary) {
+          setCurrentSummary(lastDataEntry.newSummary);
+          toast.success("New summary received!");
+        }
+      }
+    }
+  }, [data, currentSummary]);
 
   if (!isClient) return null;
 
@@ -176,7 +236,7 @@ export default function Page() {
               <div className={`transition-opacity duration-300 ${isListening || isStagingAreaActive ? 'opacity-100' : 'opacity-50'}`}>
                 <div className="border border-gray-300 rounded-lg p-4 bg-gray-50 min-h-[120px]">
                   <h3 className="text-sm font-semibold text-gray-500 mb-2">LIVE TEXT (Staging Area)</h3>
-                  <p className={`text-gray-800 transition-colors duration-200 ${isReadyForAssignment ? 'font-bold' : 'font-normal'}`}>
+                  <p className="text-gray-800">
                     {transcript.final}
                     <span className="text-gray-500 font-normal">{transcript.interim}</span>
                   </p>
@@ -242,6 +302,15 @@ export default function Page() {
             </div>
           </div>
           
+          {currentSummary && (
+            <div className="mt-8 border-t-2 border-gray-200 pt-6">
+              <h2 className="text-xl font-semibold text-gray-700 mb-4">Current Session Summary</h2>
+              <div className="border border-gray-300 rounded-lg p-4 bg-yellow-50">
+                <p className="text-gray-800 whitespace-pre-wrap">{currentSummary}</p>
+              </div>
+            </div>
+          )}
+
           <div className="mt-8 border-t-2 border-gray-200 pt-6">
             <h2 className="text-xl font-semibold text-gray-700 mb-4">AI Actions & Output</h2>
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

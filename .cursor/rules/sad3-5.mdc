@@ -1,0 +1,46 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+SAD-2.5: Refactoring the Transcription Hook for Robustness
+
+1. Purpose:
+   To address the critical fragility of the `useContinuousTranscription.ts` hook. The current implementation is a liability to the project's stability. This document outlines the plan to refactor it into a deterministic, reliable, and maintainable component.
+
+2. The Core Problem (Technical Debt):
+   The current hook (v0.5) uses a `setTimeout`-based "ignore flag" (`ignoreNextResultRef`) to prevent a race condition.  
+   **Why It’s a Bug:** This is a non-deterministic hack. It assumes any stray result from the SpeechRecognition API will arrive within 250ms. Under heavy load or with system delays, the guess fails and the staging area may not clear correctly.
+
+3. The Required Solution: A Deterministic stop-and-restart Cycle
+   Remove all timer-based logic and refactor the hook to use the browser API’s own state events. This guarantees no stray results after `takeTranscript` is called.
+
+4. New `useContinuousTranscription.ts` Logic:
+   - **`takeTranscript()` Function (The Core Change):**
+     1. **Call** `recognitionRef.current?.stop()` immediately.  
+     2. **Capture** text from internal refs.  
+     3. **Clear** internal refs.  
+     4. **Return** the captured text.
+   - **`onend()` Event Handler (The Engine):**
+     - Reads `listeningRef.current` (desired state).  
+     - If `true`: recognition ended by our stop → **call** `recognition.start()` for a fresh cycle.  
+     - If `false`: user clicked “Stop Session” → **do nothing**.
+   - **State Management:**
+     - `start()` / `stop()` only set `listeningRef.current` and call `recognition.start()` or `recognition.stop()`.  
+     - No restart logic or timers.
+
+5. Implementation Plan:
+   - **Delete** existing code in `useContinuousTranscription.ts` and start fresh.  
+   - **Remove** `ignoreNextResultRef`, `ignoreTimeoutRef`, and all timer logic.  
+   - **Implement** new `takeTranscript()` with `recognitionRef.current?.stop()` as its first action.  
+   - **Implement** the new `onend` handler to auto-restart when `listeningRef.current` is `true`.  
+   - **Simplify** `start()` and `stop()` to only set desired state and call the API.
+
+6. Expected Outcome:
+   - **100% Reliability:** Eliminate the race condition; staging area clears correctly every time.  
+   - **Increased Simplicity:** Fewer state variables; no timers; easier to reason about.  
+   - **Enhanced Robustness:** `onend` auto-restart also recovers from browser timeouts after silence, keeping sessions alive.
+
+**Conclusion:**  
+This final refactor pays down our most significant technical debt. After completion, the project will be functionally rich, architecturally sound, and technically stable—ready for the next phase of development and testing.
+

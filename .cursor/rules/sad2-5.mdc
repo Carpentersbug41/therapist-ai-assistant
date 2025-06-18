@@ -1,0 +1,70 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# Implementation & Sequencing Plan for v2.0
+
+## 1. Purpose
+To provide a step-by-step, ordered checklist for implementing the v2.0 architecture. Each step should be completed and verified before moving to the next to minimize complexity and facilitate debugging.
+
+---
+
+## Phase 1: Client-Side Refactor (The Payload Constructor)
+
+**Step 1.1:**  
+In `page.tsx`, add the `currentSummary` state variable, initialized to `""`.
+
+**Step 1.2:**  
+Implement the `createActionMessages` helper function. Write a unit test for it (UT-1) and verify it passes.
+
+**Step 1.3:**  
+Replace the existing `handleActionClick` function with the new version defined in SAD-2.1.
+
+**Step 1.4 (Verification):**  
+At this point, the application will be broken, as the server expects the old payload.  
+- Use the browser’s developer tools (Network tab) to confirm that the outgoing POST request to `/api/chat` now contains the new, correct JSON body as specified in SAD-2.2.  
+- Do not proceed until this is confirmed.
+
+---
+
+## Phase 2: Server-Side Refactor (The Orchestrator)
+
+**Step 2.1:**  
+In `route.ts`, update the `POST` function to parse the new request body format. Verify this with UT-2.
+
+**Step 2.2:**  
+Implement the Action Task logic. The server should now correctly process an action using the `messagesForAction` buffer and the relevant system prompt.
+
+**Step 2.3 (Verification):**  
+The application should now be partially working again. Perform E2E test E2E-1.  
+- The actions should work, but no summary will be generated or updated.
+
+**Step 2.4:**  
+Implement the placeholder Memory Task logic.  
+- Add the `StreamData` object and the logic to pass `newSummary` back, even if it’s just a placeholder for now.
+
+**Step 2.5:**  
+Implement the `useEffect` hook on the client (`page.tsx`) to listen for and update `currentSummary` from the `StreamData`.
+
+**Step 2.6:**  
+Implement the full “Tumbling Window” summarization logic in the Memory Task on the server.  
+- Write an integration test for the trigger logic (IT-1).
+
+**Step 2.7 (Verification):**  
+Perform the full suite of E2E tests (E2E-1, E2E-2, E2E-3).  
+- The entire system should now be working as designed.
+
+---
+
+## Phase 3: Final Cleanup
+
+**Step 3.1:**  
+Remove any old, unused code, console logs, or feature flags related to the v1.x architecture.
+
+**Step 3.2:**  
+Add comments to the new complex sections in `page.tsx` and `route.ts`, referencing the SAD documents.
+
+**Step 3.3:**  
+Final code review.
+

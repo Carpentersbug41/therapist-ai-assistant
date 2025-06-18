@@ -7,87 +7,66 @@ export interface Transcript {
   interim: string;
 }
 
+// NOTE: This is the v2.4 implementation. It is deterministic AND captures interim text on demand.
 export function useContinuousTranscription(onEvent: (eventName: string) => void) {
   const [isListening, setIsListening] = useState(false);
   const [transcript, setTranscript] = useState<Transcript>({ final: '', interim: '' });
   const [isSupported, setIsSupported] = useState(false);
+  
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   
-  const listeningRef = useRef(false);
+  const listeningRef = useRef(false); 
   const finalTranscriptRef = useRef<string>('');
-  const interimTranscriptRef = useRef<string>('');
-  
-  const ignoreNextResultRef = useRef(false);
-  const ignoreTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
-  const setListeningState = (isListening: boolean) => {
-    listeningRef.current = isListening;
-    setIsListening(isListening);
-  };
+  const interimTranscriptRef = useRef<string>(''); // NEW: Ref to track interim text
 
   const takeTranscript = useCallback(() => {
     onEvent('takeTranscript');
     
-    if (ignoreTimeoutRef.current) {
-      clearTimeout(ignoreTimeoutRef.current);
-      ignoreTimeoutRef.current = null;
-    }
+    // 1. Immediately command the recognition engine to stop. This remains the core of the robust design.
+    recognitionRef.current?.stop();
 
-    const final = finalTranscriptRef.current;
-    const interim = interimTranscriptRef.current;
+    // 2. Capture BOTH final and interim text from our internal refs.
+    const capturedText = (finalTranscriptRef.current + ' ' + interimTranscriptRef.current).trim();
     
+    // 3. Clear both internal refs.
     finalTranscriptRef.current = '';
     interimTranscriptRef.current = '';
-    
-    ignoreNextResultRef.current = true;
-    
-    ignoreTimeoutRef.current = setTimeout(() => {
-      if (ignoreNextResultRef.current) {
-        console.log('[SpeechService] ignoreNextResultRef timed out, unsetting.');
-        onEvent('ignore_timeout');
-        ignoreNextResultRef.current = false;
-      }
-      ignoreTimeoutRef.current = null;
-    }, 250);
-    
+
+    // 4. Reset the public-facing transcript state.
     setTranscript({ final: '', interim: '' });
     
-    return (final + interim).trim();
+    // 5. Return the full captured text.
+    return capturedText;
   }, [onEvent]);
 
   const processResult = useCallback((event: SpeechRecognitionEvent) => {
-    if (ignoreNextResultRef.current) {
-      console.log('[SpeechService] Ignored stray result after takeTranscript.');
-      onEvent('ignoredResult');
-      ignoreNextResultRef.current = false;
-      if (ignoreTimeoutRef.current) {
-        clearTimeout(ignoreTimeoutRef.current);
-        ignoreTimeoutRef.current = null;
-      }
-      return;
-    }
-    
     onEvent('onresult');
     let interim = '';
-    let final = finalTranscriptRef.current;
+    let final = '';
 
-    for (let i = event.resultIndex; i < event.results.length; ++i) {
+    // Rebuild the full transcript string from the results
+    for (let i = 0; i < event.results.length; ++i) {
       if (event.results[i].isFinal) {
-        final += event.results[i][0].transcript;
+        final += event.results[i][0].transcript + ' ';
       } else {
         interim += event.results[i][0].transcript;
       }
     }
     
-    finalTranscriptRef.current = final;
-    interimTranscriptRef.current = interim;
-    setTranscript({ final, interim });
+    // Update our internal refs and the public state
+    finalTranscriptRef.current = final.trim();
+    interimTranscriptRef.current = interim.trim();
+    setTranscript({ final: final.trim(), interim: interim.trim() });
   }, [onEvent]);
-  
+
   const start = useCallback(() => {
-    if (recognitionRef.current) {
+    if (recognitionRef.current && !listeningRef.current) {
       onEvent('start (manual)');
-      setListeningState(true);
+      listeningRef.current = true;
+      setIsListening(true);
+      finalTranscriptRef.current = '';
+      interimTranscriptRef.current = '';
+      setTranscript({ final: '', interim: '' });
       recognitionRef.current.start();
     }
   }, [onEvent]);
@@ -95,7 +74,7 @@ export function useContinuousTranscription(onEvent: (eventName: string) => void)
   const stop = useCallback(() => {
     if (recognitionRef.current) {
       onEvent('stop (manual)');
-      setListeningState(false);
+      listeningRef.current = false;
       recognitionRef.current.stop();
     }
   }, [onEvent]);
@@ -103,7 +82,6 @@ export function useContinuousTranscription(onEvent: (eventName: string) => void)
   useEffect(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      console.error("Speech Recognition is not supported in this browser.");
       setIsSupported(false);
       return;
     }
@@ -116,41 +94,46 @@ export function useContinuousTranscription(onEvent: (eventName: string) => void)
     recognition.onresult = processResult;
     
     recognition.onstart = () => {
-      console.log('[SpeechService] Event: onstart');
       onEvent('onstart');
       setIsListening(true);
     };
 
     recognition.onend = () => {
-      console.log('[SpeechService] Event: onend');
       onEvent('onend');
+      setIsListening(false);
+      
       if (listeningRef.current) {
-        console.log('[SpeechService] Desired state is listening, restarting service...');
         onEvent('restarting...');
+        // If restarting after a takeTranscript, the transcript refs have already been cleared.
+        // If restarting after a natural pause, we need to consolidate the text.
+        if (interimTranscriptRef.current) {
+            finalTranscriptRef.current = (finalTranscriptRef.current + ' ' + interimTranscriptRef.current).trim();
+            interimTranscriptRef.current = '';
+            setTranscript({ final: finalTranscriptRef.current, interim: '' });
+        }
+        
         try {
           recognition.start();
         } catch (e) {
           console.error("[SpeechService] Restart failed:", e);
           onEvent('restart_failed');
-          setListeningState(false);
+          listeningRef.current = false;
         }
-      } else {
-        setIsListening(false);
       }
     };
 
     recognition.onerror = (event) => {
-      console.error(`[SpeechService] Event: onerror, error: "${event.error}"`);
       onEvent(`onerror: ${event.error}`);
+      if (event.error === 'no-speech' || event.error === 'network') {
+          return; // The onend handler will take care of restarting if needed.
+      }
+      listeningRef.current = false;
     };
     
     recognitionRef.current = recognition;
 
     return () => {
       listeningRef.current = false;
-      if (ignoreTimeoutRef.current) {
-        clearTimeout(ignoreTimeoutRef.current);
-      }
       recognition.stop();
     };
   }, [onEvent, processResult]);

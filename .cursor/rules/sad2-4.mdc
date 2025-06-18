@@ -1,0 +1,51 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# Test Plan for v2.0 Architecture
+
+1. **Purpose:**  
+   To define a set of verifiable tests to ensure the v2.0 memory and state refactor has been implemented correctly and has not introduced regressions. This plan covers unit tests for individual functions and end-to-end (E2E) tests for the complete user flow.
+
+2. **Unit & Integration Tests (Code-Level):**  
+   - **[UT-1] createActionMessages Helper:**  
+     - *Given:* An array of `TranscriptEntry` objects.  
+     - *Then:* The function must return an array of `MessageObject`s.  
+     - *And:* `speaker: 'client'` must map to `role: 'user'`.  
+     - *And:* `speaker: 'therapist'` must map to `role: 'assistant'`.  
+   - **[UT-2] Server-Side Payload Parser:**  
+     - *Given:* A valid JSON request body.  
+       - *Then:* The server function must correctly destructure `action`, `messagesForAction`, `fullTranscript`, and `currentSummary`.  
+     - *Given:* An invalid body (missing a key).  
+       - *Then:* The server must return a **400 Bad Request** error.  
+   - **[IT-1] Summarization Trigger Logic:**  
+     - *Given:* A `fullTranscript` with 11 turns and `SUMMARIZE_TRIGGER_SIZE = 12`.  
+       - *Then:* The summarization LLM call must **NOT** be made.  
+     - *Given:* A `fullTranscript` with 12 turns.  
+       - *Then:* The summarization LLM call **MUST** be made.  
+
+3. **End-to-End (E2E) Tests (User-Flow Level):**  
+   - **[E2E-1] First Action Call (No Summary):**  
+     1. Start a new session. Record 4 turns. Click **"Paraphrase"**.  
+     **Expected Result:**  
+     - The client sends a payload where `currentSummary` is `""`.  
+     - The server sends an LLM payload containing only a system message and the 4 user/assistant messages.  
+     - The client receives the paraphrase. The `currentSummary` state remains `""`.  
+
+   - **[E2E-2] Summarization Trigger and State Update:**  
+     1. Continue the session from E2E-1. Record 8 more turns (total 12). Click **"Reflect"**.  
+     **Expected Result:**  
+     - The client sends a payload where `currentSummary` is still `""`.  
+     - The server detects the trigger condition (12 turns).  
+     - The server makes two LLM calls (one for Reflection, one for Summary).  
+     - The client receives the streaming **Reflection** text.  
+     - The client's `currentSummary` state is updated with the new summary received from the server's data stream.  
+
+   - **[E2E-3] Action Call with Existing Summary:**  
+     1. Continue the session from E2E-2. Record 2 more turns (total 14). Click **"Key Insights"**.  
+     **Expected Result:**  
+     - The client sends a payload where `currentSummary` contains the summary generated in the previous step.  
+     - The server does **not** meet the trigger condition (14 < 12 + 6). It does **not** make a new summary call.  
+     - The client receives the **Key Insights**. The `currentSummary` state does not change.  
+

@@ -11,7 +11,7 @@ alwaysApply: false
 **Date:** [Current Date]
 
 ## 1. Introduction and Purpose
-This document outlines the proposed architectural changes for Version 2.0 of the Therapist AI Assistant. The current stateless architecture is not scalable for real-world use due to context window limitations and API inefficiencies. This refactor will introduce a sophisticated, stateful memory system, creating a robust foundation for future development. The goal is to evolve the application from a prototype into a scalable, production-ready tool.
+This document outlines the proposed architectural changes for Version 2.0 of the Therapist AI Assistant. The current stateless architecture is not scalable for real-world use due to context window limitations and API inefficiencies. This refactor will introduce a sophisticated, stateful memory system, creating a robust foundation for future development. The goal is to evolve the application from a prototype into a scalable, production-ready tool.  NEVER use Langchain in this as it is slow and buggy and opaque.
 
 ## 2. Current Architecture (v1.x) – A Critical Assessment
 - **Data Flow:**  

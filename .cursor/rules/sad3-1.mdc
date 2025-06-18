@@ -1,0 +1,56 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+SAD-2.4: Manual Note Entry & Context Injection
+
+1. Purpose:  
+   To introduce a feature allowing the therapist to manually add private, unspoken notes to the session log. These notes will be treated as first-class contextual information and made available to the AI to enrich its analysis and suggestions.
+
+2. User Interface (UI) Changes (`page.tsx`):  
+   - Add a multi-line `<textarea>` near the "Staging Area" or "Final Transcript Log".  
+   - Add an "Add Note" button, disabled until the textarea contains text.
+
+3. Client-Side Logic (`page.tsx`):  
+   **New State Variable:**  
+       const [noteText, setNoteText] = useState("");  
+   
+   **New Handler Function: `handleAddNote()`**  
+       function handleAddNote() {  
+           if (!noteText.trim()) return;  
+           const newNoteEntry = { speaker: 'note', text: noteText.trim() };  
+           setTranscriptLog(prevLog => [...prevLog, newNoteEntry]);  
+           setNoteText("");  
+       }  
+
+4. “Simulated Reality” & Payload Changes:  
+   - **`createActionMessages(buffer)`** must skip entries where `speaker === 'note'`.  
+   - **`formatHistoryToString(messages)`** (server-side) must render note entries clearly:  
+         [Therapist’s Private Note]: Client seemed hesitant discussing their family.
+
+5. Prompting Strategy & Context Injection:  
+   - **Low-Context Actions:**  
+       1. Build `messagesForAction` (notes filtered out).  
+       2. Build `notesString` from buffer notes only.  
+       3. Inject into system prompt:  
+           
+           You are a caring therapist…  
+           
+           ### THERAPIST’S PRIVATE NOTES (for context) ###  
+           ${notesString}  
+           
+           <Rest of instructions>  
+   - **High-Context Actions:**  
+       Notes already appear in the formatted history via `formatHistoryToString`, so the existing “Instruction Sandwich” prompt works unchanged.
+
+6. Implementation Plan:  
+   - Add the `<textarea>` and “Add Note” button in `page.tsx`.  
+   - Implement `noteText` state and `handleAddNote`.  
+   - Update `TranscriptEntry` type to include `'note'`.  
+   - Modify `createActionMessages` to filter out notes.  
+   - Modify server logic in `route.ts` to inject notes into low-context prompts.  
+   - Modify `formatHistoryToString` to render notes for high-context prompts.
+
+This feature captures the therapist’s internal clinical reasoning, giving the AI richer, “unspoken” context to draw from.  
+
