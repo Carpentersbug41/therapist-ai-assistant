@@ -1,0 +1,76 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+SAD-2.2: API Payload & "Simulated Reality" Message Format  
+1. Purpose:  
+This document provides a concrete, unambiguous definition of the JSON payload sent from the client to the server (`/api/chat`). It also specifies the exact structure of the `messagesForAction` array, which forms the "simulated reality" for the LLM.
+
+2. API Request Body Specification:  
+The client will send a POST request to `/api/chat`. The Content-Type will be `application/json`. The body of the request will be a single JSON object with the following structure:
+
+| Key               | Type                   | Required | Description                                                                                     |
+|-------------------|------------------------|----------|-------------------------------------------------------------------------------------------------|
+| action            | string                 | Yes      | The name of the action to perform (e.g., `"Paraphrase"`, `"SummariseEnd"`). Must be a key in `PROMPTS.ts`. |
+| messagesForAction | Array<MessageObject>   | Yes      | The "simulated reality" conversation history buffer. See Section 3 for structure.               |
+| fullTranscript    | string                 | Yes      | The complete, raw transcript of the entire session, formatted as a newline-delimited string.    |
+| currentSummary    | string                 | Yes      | The existing summary of the conversation from the previous turn. Can be an empty string.        |
+
+3. MessageObject Specification:  
+Each object within the `messagesForAction` array will have the following structure:
+
+| Key     | Type   | Required | Description                              |
+|---------|--------|----------|------------------------------------------|
+| role    | string | Yes      | Must be either `"user"` or `"assistant"`. |
+| content | string | Yes      | The verbatim text of the utterance.      |
+
+4. Concrete Example:  
+Scenario:  
+- `transcriptLog` contains 8 turns.  
+- `MEMORY_BUFFER_SIZE` is 6.  
+- `currentSummary` is `"Client discussed initial anxiety about work."`  
+- User clicks the **"Reflect"** button.
+
+A. The transcriptLog buffer (`newLog.slice(-6)`):
+
+    [
+      { speaker: 'client',    text: 'I just feel so overwhelmed.' },
+      { speaker: 'therapist', text: 'Tell me about "overwhelmed".' },
+      { speaker: 'client',    text: "It's the emails. They never stop." },
+      { speaker: 'therapist', text: 'A constant barrage.' },
+      { speaker: 'client',    text: "Yes! And I feel like I'm drowning." },
+      { speaker: 'therapist', text: 'That word, "drowning," sounds heavy.' }
+    ]
+
+Use code with caution.
+
+B. The `messagesForAction` array created by `createActionMessages()`:
+
+    [
+      { "role": "user",      "content": "I just feel so overwhelmed." },
+      { "role": "assistant", "content": "Tell me about \"overwhelmed.\"" },
+      { "role": "user",      "content": "It's the emails. They never stop." },
+      { "role": "assistant", "content": "A constant barrage." },
+      { "role": "user",      "content": "Yes! And I feel like I'm drowning." },
+      { "role": "assistant", "content": "That word, \"drowning,\" sounds heavy." }
+    ]
+
+Use code with caution.
+
+C. The Final JSON Payload sent to the server:
+
+    {
+      "action": "Reflect",
+      "messagesForAction": [
+        { "role": "user",      "content": "I just feel so overwhelmed." },
+        { "role": "assistant", "content": "Tell me about \"overwhelmed.\"" },
+        { "role": "user",      "content": "It's the emails. They never stop." },
+        { "role": "assistant", "content": "A constant barrage." },
+        { "role": "user",      "content": "Yes! And I feel like I'm drowning." },
+        { "role": "assistant", "content": "That word, \"drowning,\" sounds heavy." }
+      ],
+      "fullTranscript": "Therapist: ...\nClient: ...\n(All 8 turns as a single string)",
+      "currentSummary": "Client discussed initial anxiety about work."
+    }
+

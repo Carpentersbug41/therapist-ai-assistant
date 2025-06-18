@@ -1,0 +1,138 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# Software Architecture Document (SAD)
+**Project:** Therapist AI Assistant  
+**Version:** 2.0 (Memory & State Refactor)  
+**Status:** Proposed  
+**Author:** AI Engineering Lead  
+**Date:** [Current Date]
+
+## 1. Introduction and Purpose
+This document outlines the proposed architectural changes for Version 2.0 of the Therapist AI Assistant. The current stateless architecture is not scalable for real-world use due to context window limitations and API inefficiencies. This refactor will introduce a sophisticated, stateful memory system, creating a robust foundation for future development. The goal is to evolve the application from a prototype into a scalable, production-ready tool.
+
+## 2. Current Architecture (v1.x) – A Critical Assessment
+- **Data Flow:**  
+  The client sends the entire raw transcript to the server on every request.
+- **State Management:**  
+  The system is entirely stateless. The server has no memory of previous turns.
+- **Prompting:**  
+  The prompt is constructed naively, sending redundant and confusing data to the LLM.
+- **Limitations:**  
+  - **Context Window Failure:** Will fail on any session longer than a few minutes.  
+  - **High Cost & Latency:** Inefficiently re-processes the entire transcript on every call.  
+  - **Poor AI Performance:** The LLM is given a confusing, polluted context, leading to suboptimal responses.
+
+## 3. Proposed Architecture (v2.0) – The New Blueprint
+
+### 3.1. Core Principles
+- **Stateful Client, Stateless Server:**  
+  The client (`page.tsx`) will be the single source of truth for conversational state (full transcript, current summary). The server (`route.ts`) remains stateless, receiving all necessary context for each call.
+- **Atomic API Calls:**  
+  Every API request will be self-contained, providing the server with everything it needs for the two primary tasks: Action and Summarization.
+- **Role-Based Prompting Integrity:**  
+  The system will generate a "simulated reality" for the LLM, casting the Client's words as user messages and the Therapist's words as assistant messages to align with the AI's instructed persona.
+- **Separation of Concerns:**  
+  The immediate user-facing "Action" task will be decoupled from the background "Summarization" task.
+
+### 3.2. Data Flow Diagram (v2.0)
+
+
+[Client: page.tsx]
+|
+|-- Holds state:
+| - transcriptLog (Array of all turns)
+| - currentSummary (String)
+|
+|-- User Clicks "Paraphrase" --> handleActionClick()
+|
+|-- 1. CONSTRUCTS PAYLOAD:
+| - messagesForAction: Last 6 turns, formatted as [user, assistant, ...]
+| - fullTranscript: The entire transcript as a string.
+| - currentSummary: The existing summary string.
+|
+V
+[POST /api/chat] --> API Payload: { action, messagesForAction, fullTranscript, currentSummary }
+|
+V
+[Server: route.ts]
+|
+|-- 2. RECEIVES & PARSES PAYLOAD
+|
+|-- 3. PERFORMS TWO TASKS:
+| |
+| |-- a) ACTION TASK (Immediate)
+| | - Builds system prompt for "Paraphrase".
+| | - Sends system + messagesForAction to LLM.
+| | - Streams LLM response back to client.
+| |
+| |-- b) SUMMARY TASK (Background)
+| | - Implements "Tumbling Window" logic using fullTranscript and currentSummary.
+| | - If trigger is met (e.g., 6 new messages), calls LLM to update summary.
+| | - Generates newSummary string.
+|
+|-- 4. ATTACHES newSummary TO STREAM
+| - Uses StreamData to embed the newSummary into the response stream from the Action Task.
+|
+V
+[Client: page.tsx]
+|
+|-- 5. RECEIVES STREAM:
+| - Renders the streaming text from the Action Task in the UI.
+| - useEffect hook detects newSummary in the stream's data.
+|
+|-- 6. UPDATES STATE:
+| - setCurrentSummary(newSummary)
+|
+'--> Loop complete. Client state is ready for the next action.
+
+**Use code with caution.**
+
+### 3.3. Key Component Design
+#### page.tsx (Client)
+- **State:**  
+  1. `transcriptLog: TranscriptEntry[]` — The canonical, ordered log of every utterance.  
+  2. `currentSummary: string` — The latest summary received from the server.
+
+- **`handleActionClick(action)`:**  
+  **Responsibility:** To orchestrate the creation of the API payload.  
+  **Logic:**  
+  1. Slice the last N turns from `transcriptLog` for the buffer.  
+  2. Call a helper, `createActionMessages(buffer)`, to format this buffer into `[{role:'user'}, {role:'assistant'}]`.  
+  3. Format the entire `transcriptLog` into a single string for the summarizer.  
+  4. Call `append` with a clean body object containing `action`, `messagesForAction`, `fullTranscript`, and `currentSummary`.
+
+- **`useEffect` on `useChat().data`:**  
+  **Responsibility:** Listen for updated summaries from the server.  
+  **Logic:** Watch the `data` object from the `useChat` hook and update `currentSummary` state when a new summary is detected.
+
+#### route.ts (Server)
+- **Responsibility:** Master Prompt Engineer & task orchestrator.  
+- **Input:** JSON body `{ action, messagesForAction, fullTranscript, currentSummary }`.  
+
+- **Primary Logic (`actionChain`):**  
+  1. Select system prompt from `PROMPTS.ts` based on `action`.  
+  2. Combine with `messagesForAction`.  
+  3. Initiate a streaming LLM call (user-facing).
+
+- **Secondary Logic (`summarizer`):**  
+  - Implements "Tumbling Window" memory strategy.  
+  - **Constants:** `MAX_BUFFER_SIZE = 6`, `SUMMARIZE_TRIGGER_SIZE = 12`.  
+  - **Trigger:** `fullTranscript.length > SUMMARIZE_TRIGGER_SIZE`.  
+  - **Process:** Identify oldest N messages not yet summarized, call LLM to update summary, generate `newSummary`.
+
+- **Data Return:**  
+  Uses `StreamData` to attach `newSummary` to the streaming response from `actionChain`.
+
+## 4. Risks and Mitigation
+- **Risk:** Increased complexity in `route.ts`.  
+  **Mitigation:** Separate action logic and summarization logic into well-named functions.
+
+- **Risk:** Latency from background summarization call.  
+  **Mitigation:** Stream user-facing action immediately; summarization runs in parallel.
+
+- **Risk:** Additional LLM call cost.  
+  **Mitigation:** “Tumbling Window” strategy ensures infrequent calls, reducing overall cost.
+

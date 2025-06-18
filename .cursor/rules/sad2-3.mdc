@@ -1,0 +1,83 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# SAD-2.3: Server-Side Logic: Dual-Task Processing & Memory Management
+1. Purpose:
+   This document specifies the complete operational logic of the server-side endpoint (`/api/chat/route.ts`). The server acts as a sophisticated orchestrator, receiving a single request and performing two distinct but related tasks: an immediate, user-facing Action Task and a background Memory Task.
+
+2. Entry Point & Payload Parsing:
+   - The server's `POST` function will receive a JSON request body conforming to the structure defined in SAD-2.2.
+   - It will immediately destructure the body into four variables: `action`, `messagesForAction`, `fullTranscript`, and `currentSummary`.
+   - Basic validation will ensure `action` is a valid key within `PROMPTS.ts`.
+
+3. Core Architecture: Dual-Task Model
+   The server executes two logical chains. The Action Task is primary and must respond immediately. The Memory Task runs in concert and appends its result to the primary task's stream.
+
+   3.1. The Action Task  
+   **Goal:** To generate the AI response that the user directly requested (e.g., a paraphrase, a reflection).  
+   **Inputs:** `action`, `messagesForAction`.  
+   **Process:**  
+   - Select System Prompt: Retrieve `PROMPTS[action]`.  
+   - Construct Final Payload for LLM:  
+       - System message: `{ role: 'system', content: PROMPTS[action] }`  
+       - Spread `...messagesForAction` into the array.  
+   - Initiate LLM Stream: Execute a streaming call to the LLM (e.g., `ChatOpenAI`) with this payload.  
+   - Return Stream: The resulting stream of text tokens (`actionStream`) is sent back to the client.
+
+   3.2. The Memory Task (Summarization)  
+   **Goal:** To intelligently maintain a running summary of the conversation, keeping context within token limits.  
+   **Inputs:** `fullTranscript`, `currentSummary`.  
+   **Strategy:** “Tumbling Window” Summarization  
+   **Constants:**  
+       const MEMORY_BUFFER_SIZE = 6;  
+       const SUMMARIZE_TRIGGER_SIZE = 12;  
+   **Execution Logic:**  
+   1. **Count Turns:** Split `fullTranscript` into an array to get `totalTurnCount`.  
+   2. **Check Trigger:** Only run if `totalTurnCount >= SUMMARIZE_TRIGGER_SIZE`. Otherwise, `newSummary = currentSummary`.  
+   3. **Identify Content to Summarize:** Extract lines not in `currentSummary` and not in the last `MEMORY_BUFFER_SIZE` turns.  
+   4. **Construct Summarization Prompt:**  
+       You are a conversation summarization model. Your task is to update the previous summary with the key information from the new conversation lines provided. Maintain a concise, third-person perspective.  
+       
+       [PREVIOUS SUMMARY]  
+       {currentSummary}  
+       
+       [NEW LINES TO INTEGRATE]  
+       {contentToSummarize}  
+       
+       [NEW, UPDATED SUMMARY]  
+   5. **Execute Summarization LLM Call:** Make a non-streaming call to the LLM with the prompt above.  
+   6. **Store Result:** The returned string is `newSummary`.
+
+4. Response Orchestration & Data Return
+   - **Mechanism:** Vercel AI SDK’s `StreamData` object.  
+   - **Process:**  
+     1. Start `actionStream` from the Action Task.  
+     2. Compute or pass through `newSummary`.  
+     3. Append to stream: `data.append({ newSummary })`.  
+     4. Wrap the stream with the adapter (e.g., `LangChainAdapter`).  
+     5. In the `onFinal()` callback, call `data.close()` to end the stream.  
+   - Return the combined stream as a `StreamingTextResponse`.
+
+5. Concrete Example of Server Logic:
+   **Scenario:**  
+   - `totalTurnCount` is 12.  
+   - `action` is `"Reflect"`.  
+   - `currentSummary` is `"Client discussed initial anxiety."`.  
+
+   **Server Execution:**  
+   1. **Action Task:**  
+      - Retrieves the Reflect prompt.  
+      - Takes `messagesForAction` buffer (turns 7–12).  
+      - Calls the LLM; begins streaming tokens back.  
+   2. **Memory Task (in parallel):**  
+      - Sees `totalTurnCount (12) ≥ SUMMARIZE_TRIGGER_SIZE (12)`.  
+      - Identifies turns 1–6 to summarize.  
+      - Calls the LLM with the summarization prompt.  
+      - Awaits response:  
+        `newSummary = "Client discussed initial anxiety and the overwhelming nature of their emails, which they described as 'drowning'."`  
+   3. **Response Finalization:**  
+      - Appends `newSummary` to the `StreamData` of the running action stream.  
+      - The client UI displays the reflective text as it streams and updates its `currentSummary` state when the summary arrives.
+
